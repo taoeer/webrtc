@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Socket.IO chat</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <div class="start">
+      <form class="login">
+        <input class="username" type="text" placeholder="请输入用户名" />
+        <button type="submit">登录</button>
+      </form>
+    </div>
+    <div class="app">
+      <div class="chatbox">
+        <div class="chat-info">
+          <ul id="messages"></ul>
+          <ul class="users"></ul>
+        </div>
+        <form class="message">
+          <input id="m" autocomplete="off" /><button type="submit">SEND</button>
+        </form>
+      </div>
+      <div class="flexChild" id="camera-container">
+        <div class="camera-box">
+          <video id="received_video" autoplay></video>
+          <video id="local_video" autoplay muted></video>
+        </div>
+        <button id="hangup-button" onclick="hangUpCall();" disabled>
+          Hang Up
+        </button>
+      </div>
+    </div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="utils.js"></script>
+    <script>
+      var socket = null;
+      var $ = document.querySelector.bind(document);
+      var loginForm = $("form.login");
+      var messageForm = $("form.message");
+      var msgInput = $("#m");
+      var messages = $("#messages");
+      var videoCall = $("#video-call");
+      var flexChild = $(".flexChild");
+      var users = $(".users");
+      var mediaConstraints = {
+        audio: true, // We want an audio track
+        video: true // ...and we want a video track
+      };
+      var myPeerConnection;
+      var callerId;
+      var calleeId;
+      var hasAddTrack;
+      var hasHandleNegotiationNeededEventInvoked = false;
+
+      loginForm.addEventListener("submit", function(e) {
+        e.preventDefault();
+        $(".start").style.display = "none";
+        $(".app").style.display = "flex";
+        username = $(".username").value;
+        socket = io();
+        init();
+      });
+      messageForm.addEventListener("submit", function(e) {
+        e.preventDefault();
+        socket.emit("chat message", msgInput.value);
+        msgInput.value = "";
+      });
+      users.addEventListener("click", function invite(evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        var target = evt.target;
+        if (target.tagName.toUpperCase() !== "LI") {
+          return;
+        }
+        calleeId = target.dataset.id;
+        flexChild.style.display = "flex";
+        if (myPeerConnection) {
+          alert("You can't start a call because you already have one open!");
+        } else {
+          createPeerConnection();
+
+          navigator.mediaDevices
+            .getUserMedia(mediaConstraints)
+            .then(function(localStream) {
+              document.getElementById("local_video").srcObject = localStream;
+              myPeerConnection.addStream(localStream);
+            })
+            .catch(handleGetUserMediaError);
+        }
+      });
+      function init() {
+        socket.on("chat message", function(msg) {
+          var li = document.createElement("li");
+          li.innerHTML = msg;
+          messages.appendChild(li);
+        });
+        socket.on("id", function(msg) {
+          callerId = msg;
+          socket.emit("username", username);
+        });
+        socket.on("userList", function(userList) {
+          var htmlStr = "";
+          userList.forEach(function(u) {
+            htmlStr += '<li data-id="' + u.id + '">' + u.username + "</li>";
+          });
+          users.innerHTML = htmlStr;
+        });
+        socket.on("message", function(msg) {
+          switch (msg.type) {
+            case "video-offer":
+              handleVideoOfferMsg(msg);
+              break;
+            case "video-answer": // Callee has answered our offer
+              handleVideoAnswerMsg(msg);
+              break;
+            case "new-ice-candidate": // A new ICE candidate has been received
+              handleNewICECandidateMsg(msg);
+              break;
+          }
+        });
+      }
+
+      function createPeerConnection() {
+        myPeerConnection = new RTCPeerConnection({
+          iceServers: [
+            // Information about ICE servers - Use your own!
+            {
+              urls: "stun:stun.stunprotocol.org", // A TURN server
+              username: "webrtc",
+              credential: "turnserver"
+            }
+          ],
+          sdpSemantics: "plan-b"
+        });
+
+       
+
+        hasAddTrack = myPeerConnection.addTrack !== undefined;
+
+        myPeerConnection.onicecandidate = handleICECandidateEvent;
+        myPeerConnection.onremovetrack = handleRemoveTrackEvent;
+        myPeerConnection.oniceconnectionstatechange = handleICEConnectionStateChangeEvent;
+        myPeerConnection.onicegatheringstatechange = handleICEGatheringStateChangeEvent;
+        myPeerConnection.onsignalingstatechange = handleSignalingStateChangeEvent;
+        myPeerConnection.onnegotiationneeded = handleNegotiationNeededEvent;
+
+        if (hasAddTrack) {
+          myPeerConnection.ontrack = handleTrackEvent;
+        } else {
+          myPeerConnection.onaddstream = handleAddStreamEvent;
+        }
+      }
+
+      function handleGetUserMediaError(e) {
+        switch (e.name) {
+          case "NotFoundError":
+            alert(
+              "Unable to open your call because no camera and/or microphone" +
+                "were found."
+            );
+            break;
+          case "SecurityError":
+          case "PermissionDeniedError":
+            // Do nothing; this is the same as the user canceling the call.
+            break;
+          default:
+            alert("Error opening your camera and/or microphone: " + e.message);
+            break;
+        }
+
+        closeVideoCall();
+      }
+      function closeVideoCall() {
+        flexChild.style.display = "none";
+      }
+
+      function handleICECandidateEvent(event) {
+        if (event.candidate) {
+          log("Outgoing ICE candidate: " + event.candidate.candidate);
+
+          sendToServer({
+            type: "new-ice-candidate",
+            target: calleeId,
+            source: callerId,
+            candidate: event.candidate
+          });
+        }
+      }
+      function handleTrackEvent(event) {
+        log("*** Track event");
+        document.getElementById("received_video").srcObject = event.streams[0];
+        document.getElementById("hangup-button").disabled = false;
+      }
+      function handleAddStreamEvent(event) {
+        log("*** Stream added");
+        document.getElementById("received_video").srcObject = event.stream;
+        document.getElementById("hangup-button").disabled = false;
+      }
+      function handleRemoveTrackEvent(event) {
+        var stream = document.getElementById("received_video").srcObject;
+        var trackList = stream.getTracks();
+
+        var track = event.track;
+        var kind = track.kind.charAt(0).toUpperCase() + track.kind.slice(1);
+        log(track.kind + " track removed from incoming stream: " + track.label);
+
+        if (trackList.length == 0) {
+          log("*** All tracks removed; closing connection");
+          closeVideoCall();
+        }
+      }
+      // Handle |iceconnectionstatechange| events. This will detect
+      // when the ICE connection is closed, failed, or disconnected.
+      //
+      // This is called when the state of the ICE agent changes.
+
+      function handleICEConnectionStateChangeEvent(event) {
+        log(
+          "*** ICE connection state changed to " +
+            myPeerConnection.iceConnectionState
+        );
+
+        switch (myPeerConnection.iceConnectionState) {
+          case "closed":
+          case "failed":
+          case "disconnected":
+            closeVideoCall();
+            break;
+        }
+      }
+
+      // Set up a |signalingstatechange| event handler. This will detect when
+      // the signaling connection is closed.
+      //
+      // NOTE: This will actually move to the new RTCPeerConnectionState enum
+      // returned in the property RTCPeerConnection.connectionState when
+      // browsers catch up with the latest version of the specification!
+
+      function handleSignalingStateChangeEvent(event) {
+        log(
+          "*** WebRTC signaling state changed to: " +
+            myPeerConnection.signalingState
+        );
+        switch (myPeerConnection.signalingState) {
+          case "closed":
+            closeVideoCall();
+            break;
+        }
+      }
+
+      function handleICEGatheringStateChangeEvent(event) {
+        log(
+          "*** ICE gathering state changed to: " +
+            myPeerConnection.iceGatheringState
+        );
+      }
+
+      // Given a message containing a list of usernames, this function
+      // populates the user list box with those names, making each item
+      // clickable to allow starting a video call.
+
+      function handleUserlistMsg(msg) {
+        var i;
+        var listElem = document.querySelector(".userlistbox");
+
+        // Remove all current list members. We could do this smarter,
+        // by adding and updating users instead of rebuilding from
+        // scratch but this will do for this sample.
+
+        while (listElem.firstChild) {
+          listElem.removeChild(listElem.firstChild);
+        }
+
+        // Add member names from the received list.
+
+        msg.users.forEach(function(username) {
+          var item = document.createElement("li");
+          item.appendChild(document.createTextNode(username));
+          item.addEventListener("click", invite, false);
+
+          listElem.appendChild(item);
+        });
+      }
+
+      function handleNegotiationNeededEvent() {
+        if (hasHandleNegotiationNeededEventInvoked) {
+          return;
+        }
+        hasHandleNegotiationNeededEventInvoked = true;
+        log("*** Negotiation needed");
+
+        log("---> Creating offer");
+        myPeerConnection
+          .createOffer()
+          .then(function(offer) {
+            log("---> Creating new description object to send to remote peer");
+            return myPeerConnection.setLocalDescription(offer);
+          })
+          .then(function() {
+            log("---> Sending offer to remote peer");
+            sendToServer({
+              target: calleeId,
+              source: callerId,
+              type: "video-offer",
+              sdp: myPeerConnection.localDescription
+            });
+          })
+          .catch(reportError);
+      }
+
+      function sendToServer(data) {
+        socket.emit("message", data);
+      }
+
+      function handleVideoOfferMsg(msg) {
+        callerId = msg.source;
+        calleeId = msg.target;
+        var localStream = null;
+
+        // Call createPeerConnection() to create the RTCPeerConnection.
+
+        createPeerConnection();
+
+        // We need to set the remote description to the received SDP offer
+        // so that our local WebRTC layer knows how to talk to the caller.
+
+        var desc = new RTCSessionDescription(msg.sdp);
+
+        myPeerConnection
+          .setRemoteDescription(desc)
+          .then(function() {
+            log("Setting up the local media stream...");
+            return navigator.mediaDevices.getUserMedia(mediaConstraints);
+          })
+          .then(function(stream) {
+            log("-- Local video stream obtained");
+            localStream = stream;
+            document.getElementById("local_video").srcObject = localStream;
+
+            if (hasAddTrack) {
+              log("-- Adding tracks to the RTCPeerConnection");
+              localStream
+                .getTracks()
+                .forEach(track =>
+                  myPeerConnection.addTrack(track, localStream)
+                );
+            } else {
+              log("-- Adding stream to the RTCPeerConnection");
+              myPeerConnection.addStream(localStream);
+            }
+          })
+          .then(function() {
+            log("------> Creating answer");
+            // Now that we've successfully set the remote description, we need to
+            // start our stream up locally then create an SDP answer. This SDP
+            // data describes the local end of our call, including the codec
+            // information, options agreed upon, and so forth.
+            return myPeerConnection.createAnswer();
+          })
+          .then(function(answer) {
+            log("------> Setting local description after creating answer");
+            // We now have our answer, so establish that as the local description.
+            // This actually configures our end of the call to match the settings
+            // specified in the SDP.
+            return myPeerConnection.setLocalDescription(answer);
+          })
+          .then(function() {
+            var msg = {
+              target: callerId,
+              source: calleeId,
+              type: "video-answer",
+              sdp: myPeerConnection.localDescription
+            };
+
+            // We've configured our end of the call now. Time to send our
+            // answer back to the caller so they know that we want to talk
+            // and how to talk to us.
+
+            log("Sending answer packet back to other peer");
+            sendToServer(msg);
+          })
+          .catch(handleGetUserMediaError);
+      }
+
+      function handleVideoAnswerMsg(msg) {
+        log("Call recipient has accepted our call");
+
+        // Configure the remote description, which is the SDP payload
+        // in our "video-answer" message.
+
+        var desc = new RTCSessionDescription(msg.sdp);
+        myPeerConnection.setRemoteDescription(desc).catch(reportError);
+      }
+
+      function handleNewICECandidateMsg(msg) {
+        var candidate = new RTCIceCandidate(msg.candidate);
+
+        log("Adding received ICE candidate: " + JSON.stringify(candidate));
+        myPeerConnection.addIceCandidate(candidate).catch(reportError);
+      }
+    </script>
+  </body>
+</html>

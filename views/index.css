@@ -1,0 +1,93 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html,
+body,
+.app {
+  height: 100%;
+}
+body {
+  font: 13px Helvetica, Arial;
+}
+ul {
+  list-style-type: none;
+}
+#messages {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+  border-right: 1px solid #000;
+  width: 70%;
+}
+#messages li {
+  padding: 5px 10px;
+}
+#messages li:nth-child(odd) {
+  background: #eee;
+}
+form {
+  background: #000;
+  padding: 3px;
+  width: 100%;
+  display: flex;
+}
+form input {
+  border: 0;
+  padding: 10px;
+  margin-right: 0.5%;
+  flex: 1;
+}
+form button {
+  background: rgb(130, 224, 255);
+  border: none;
+  padding: 10px;
+  margin-left: 10px;
+}
+.app {
+  display: none;
+}
+.chatbox,
+.flexChild {
+  flex: 1;
+}
+.chatbox {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #000;
+}
+.flexChild,
+.camera-box {
+  display: flex;
+  flex-direction: column;
+}
+.flexChild {
+  padding: 10px;
+  display: none;
+}
+.camera-box,
+.camera-box video {
+  flex: 1;
+}
+.camera-box video {
+  margin-top: 10px;
+  background: rgb(224, 224, 224);
+}
+.flexChild button {
+  line-height: 3;
+  font-size: 14px;
+  margin: 10px;
+  background: red;
+  color: white;
+  border: none;
+  border-radius: 10px;
+}
+.chat-info {
+  display: flex;
+  flex: 1;
+}
+.users {
+  flex: 1;
+  padding: 10px;
+}
